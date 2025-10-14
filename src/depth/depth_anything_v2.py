@@ -1,6 +1,5 @@
 """
-Depth Estimator
-单目深度估计（Depth Anything V2）
+Depth Anything V2 - 最先进的单目深度估计
 """
 
 import torch
@@ -10,36 +9,26 @@ from typing import Optional, Tuple
 import cv2
 
 
-class DepthEstimator:
-    """深度估计器"""
+class DepthAnythingV2:
+    """Depth Anything V2深度估计器"""
     
     def __init__(
         self,
-        method: str = "depth_anything_v2",
-        model_size: str = "base",
+        model_size: str = "base",  # small/base/large
         device: str = "cuda"
     ):
-        self.method = method
         self.device = device
         self.model_size = model_size
         
-        self.model = self._load_model(method, model_size)
+        self.model = self._load_model(model_size)
         self.model.eval()
         
-        print(f"✓ DepthEstimator loaded: {method}-{model_size}")
+        print(f"✓ DepthAnythingV2 loaded: {model_size}")
     
-    def _load_model(self, method: str, model_size: str):
+    def _load_model(self, model_size: str):
         """加载模型"""
-        if method == "depth_anything_v2":
-            return self._load_depth_anything_v2(model_size)
-        elif method == "midas":
-            return self._load_midas()
-        else:
-            raise ValueError(f"Unknown method: {method}")
-    
-    def _load_depth_anything_v2(self, model_size: str):
-        """加载Depth Anything V2"""
         try:
+            # 尝试加载Depth Anything V2
             import torch.hub
             
             model_map = {
@@ -50,12 +39,11 @@ class DepthEstimator:
             
             model_name = model_map.get(model_size, 'depth_anything_v2_vitb')
             
-            # 尝试从torch hub加载
+            # 从torch hub加载
             model = torch.hub.load(
                 'depth-anything/Depth-Anything-V2',
                 model_name,
-                pretrained=True,
-                trust_repo=True
+                pretrained=True
             )
             
             return model.to(self.device)
@@ -63,18 +51,13 @@ class DepthEstimator:
         except Exception as e:
             print(f"Warning: Could not load Depth Anything V2: {e}")
             print("Falling back to MiDaS...")
-            return self._load_midas()
+            return self._load_midas_fallback()
     
-    def _load_midas(self):
+    def _load_midas_fallback(self):
         """备用MiDaS模型"""
-        try:
-            import torch.hub
-            model = torch.hub.load("intel-isl/MiDaS", "DPT_Large")
-            return model.to(self.device)
-        except Exception as e:
-            print(f"Warning: Could not load MiDaS: {e}")
-            print("Using dummy depth estimator")
-            return None
+        import torch.hub
+        model = torch.hub.load("intel-isl/MiDaS", "DPT_Large")
+        return model.to(self.device)
     
     @torch.no_grad()
     def estimate(
@@ -92,11 +75,6 @@ class DepthEstimator:
         Returns:
             depth: 深度图 (H, W), 单位米
         """
-        if self.model is None:
-            # Dummy depth
-            H, W = image.shape[:2]
-            return np.random.rand(H, W) * 5 + 2
-        
         H, W = image.shape[:2]
         
         # 预处理
@@ -107,6 +85,7 @@ class DepthEstimator:
         try:
             depth = self.model(image_tensor)
         except:
+            # 兼容不同接口
             depth = self.model.forward(image_tensor)
         
         # 后处理
@@ -120,20 +99,19 @@ class DepthEstimator:
             target_size = (H, W)
         
         if depth.shape != target_size:
-            depth = cv2.resize(
-                depth,
-                (target_size[1], target_size[0]),
-                interpolation=cv2.INTER_LINEAR
-            )
+            depth = cv2.resize(depth, (target_size[1], target_size[0]), interpolation=cv2.INTER_LINEAR)
         
-        # 归一化到合理范围
+        # 归一化到合理范围 [0.5, 10]米
         depth = self._normalize_depth(depth)
         
         return depth
     
     def _preprocess(self, image: np.ndarray) -> torch.Tensor:
-        """预处理"""
+        """预处理图像"""
+        # 归一化到[0, 1]
         image = image.astype(np.float32) / 255.0
+        
+        # HWC -> CHW
         image = torch.from_numpy(image).permute(2, 0, 1).unsqueeze(0)
         
         # ImageNet标准化
@@ -144,11 +122,15 @@ class DepthEstimator:
         return image
     
     def _normalize_depth(self, depth: np.ndarray) -> np.ndarray:
-        """归一化深度到[0.5, 10]米"""
+        """归一化深度到合理范围"""
+        # 移除极端值
         p1, p99 = np.percentile(depth, [1, 99])
         depth = np.clip(depth, p1, p99)
         
+        # 归一化到[0, 1]
         depth = (depth - depth.min()) / (depth.max() - depth.min() + 1e-8)
+        
+        # 映射到[0.5, 10]米
         depth = depth * 9.5 + 0.5
         
         return depth
@@ -156,8 +138,9 @@ class DepthEstimator:
 
 # 测试
 if __name__ == "__main__":
-    estimator = DepthEstimator(device="cpu")
+    estimator = DepthAnythingV2(model_size="base", device="cpu")
     
+    # 测试图像
     image = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
     
     import time

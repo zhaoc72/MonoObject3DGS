@@ -1,0 +1,126 @@
+# Single Image Reconstruction Configuration
+experiment:
+  name: "single_image_reconstruction"
+  output_dir: "experiments"
+  device: "cuda"
+  seed: 42
+
+# Segmentation
+segmentation:
+  dinov2:
+    model_name: "facebook/dinov2-base"
+    feature_dim: 768
+    patch_size: 14
+  
+  sam:
+    model_type: "vit_h"
+    checkpoint: "data/checkpoints/sam_vit_h_4b8939.pth"
+    points_per_side: 32
+    pred_iou_thresh: 0.88
+    stability_thresh: 0.92
+    min_mask_area: 500
+  
+  refine:
+    use_features: true
+    similarity_threshold: 0.7
+    merge_iou_threshold: 0.5
+    smooth_boundary: true
+
+# Depth Estimation
+depth:
+  method: "depth_anything_v2"
+  model_size: "base"
+  
+  refine:
+    bilateral_filter: true
+    edge_preserving: true
+    remove_outliers: true
+  
+  scale_recovery:
+    method: "shape_prior"
+    reference_objects: ["chair", "table", "sofa", "bed"]
+
+# Classification
+classification:
+  method: "clip"
+  model_name: "openai/clip-vit-base-patch32"
+  categories:
+    - chair
+    - table
+    - sofa
+    - bed
+    - desk
+    - cabinet
+    - shelf
+    - lamp
+    - tv
+    - plant
+    - door
+    - window
+
+# Shape Prior
+shape_prior:
+  explicit:
+    enabled: true
+    template_dir: "data/shape_priors/explicit"
+    categories: ["chair", "table", "sofa", "bed", "desk"]
+    init_weight: 0.7
+  
+  implicit:
+    enabled: true
+    latent_dim: 256
+    encoder_layers: [64, 128, 256, 512]
+    decoder_layers: [256, 512, 1024]
+    num_output_points: 2048
+    init_weight: 0.5
+  
+  adaptive:
+    confidence_based: true
+    min_prior_weight: 0.1
+    max_prior_weight: 0.9
+    viewing_coverage: 0.3
+    segmentation_confidence: 0.8
+    reconstruction_uncertainty: 0.7
+
+# 3D Gaussian Splatting
+reconstruction:
+  gaussian:
+    sh_degree: 3
+    init_scale: 0.01
+    opacity_init: 0.1
+    position_lr: 0.00016
+    feature_lr: 0.0025
+    opacity_lr: 0.05
+    scaling_lr: 0.005
+    rotation_lr: 0.001
+  
+  optimization:
+    iterations: 2000
+    densify_from_iter: 500
+    densify_until_iter: 1500
+    densify_interval: 100
+    densify_grad_threshold: 0.0002
+    opacity_reset_interval: 3000
+  
+  loss:
+    photometric: 1.0
+    depth_consistency: 0.1
+    shape_prior: 0.6
+    semantic_consistency: 0.2
+    smoothness: 0.05
+    symmetry: 0.02
+
+# Camera
+camera:
+  fov: 60.0
+  near: 0.1
+  far: 100.0
+
+# Rendering
+rendering:
+  image_size: [512, 512]
+  novel_views:
+    enabled: true
+    num_views: 36
+    radius: 5.0
+    elevation: 30.0

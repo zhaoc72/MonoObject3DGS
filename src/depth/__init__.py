@@ -1,16 +1,15 @@
 """
 Depth Estimation Module
-单目深度估计和优化
+单目深度估计
 """
 
-from .depth_estimator import DepthEstimator, DepthAnythingV2, MiDaS
-from .depth_refiner import DepthRefiner
+from .depth_estimator import DepthEstimator
+from .depth_refiner import DepthRefiner, DepthConsistencyRefiner
 from .scale_recovery import ScaleRecovery
 
 __all__ = [
     'DepthEstimator',
-    'DepthAnythingV2',
-    'MiDaS',
     'DepthRefiner',
-    'ScaleRecovery',
+    'DepthConsistencyRefiner',
+    'ScaleRecovery'
 ]

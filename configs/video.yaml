@@ -1,0 +1,128 @@
+# Video Reconstruction Configuration
+experiment:
+  name: "video_reconstruction"
+  output_dir: "experiments"
+  device: "cuda"
+  seed: 42
+
+segmentation:
+  dinov2:
+    model_name: "facebook/dinov2-base"
+    feature_dim: 768
+  
+  sam:
+    model_type: "fastsam"
+    checkpoint: "data/checkpoints/FastSAM-x.pt"
+    min_mask_area: 500
+  
+  async:
+    enabled: true
+    keyframe_interval: 10
+    buffer_size: 5
+  
+  tracking:
+    enabled: true
+    max_age: 30
+    min_hits: 3
+    iou_threshold: 0.3
+    feature_threshold: 0.7
+  
+  refine:
+    use_features: true
+    similarity_threshold: 0.7
+    merge_iou_threshold: 0.5
+
+depth:
+  method: "depth_anything_v2"
+  model_size: "base"
+  
+  refine:
+    bilateral_filter: true
+    edge_preserving: true
+    remove_outliers: true
+  
+  temporal:
+    enabled: true
+    window_size: 5
+    consistency_weight: 0.3
+  
+  scale_recovery:
+    method: "shape_prior"
+    reference_objects: ["chair", "table", "sofa"]
+
+classification:
+  method: "clip"
+  model_name: "openai/clip-vit-base-patch32"
+  categories:
+    - chair
+    - table
+    - sofa
+    - bed
+    - desk
+    - cabinet
+    - shelf
+    - lamp
+    - tv
+    - plant
+    - door
+    - window
+
+shape_prior:
+  explicit:
+    enabled: true
+    template_dir: "data/shape_priors/explicit"
+    categories: ["chair", "table", "sofa", "bed"]
+    init_weight: 0.5
+  
+  implicit:
+    enabled: true
+    latent_dim: 256
+    encoder_layers: [64, 128, 256, 512]
+    decoder_layers: [256, 512, 1024]
+    num_output_points: 2048
+    init_weight: 0.3
+  
+  adaptive:
+    confidence_based: true
+    min_prior_weight: 0.1
+    max_prior_weight: 0.9
+    viewing_coverage: "dynamic"
+    coverage_full_frames: 50
+
+reconstruction:
+  gaussian:
+    sh_degree: 3
+    init_scale: 0.01
+    opacity_init: 0.1
+    position_lr: 0.00016
+    feature_lr: 0.0025
+    opacity_lr: 0.05
+    scaling_lr: 0.005
+    rotation_lr: 0.001
+  
+  optimization:
+    iterations: 1000
+    densify_from_iter: 200
+    densify_until_iter: 800
+    densify_interval: 100
+    densify_grad_threshold: 0.0002
+    opacity_reset_interval: 3000
+  
+  keyframe:
+    enabled: true
+    min_keyframes: 5
+    max_keyframes: 20
+    selection_strategy: "coverage"
+  
+  loss:
+    photometric: 1.0
+    depth_consistency: 0.1
+    shape_prior: 0.3
+    semantic_consistency: 0.2
+    smoothness: 0.05
+    symmetry: 0.01
+
+camera:
+  fov: 60.0
+  near: 0.1
+  far: 100.0

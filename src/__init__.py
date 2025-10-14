@@ -1,18 +1,15 @@
 """
-MonoObject3DGS Source Package
+MonoObject3DGS - Monocular Object-Level 3D Reconstruction
 """
 
-__version__ = '0.1.0'
+__version__ = '1.0.0'
 __author__ = 'Your Name'
 
-# Package information
 __all__ = [
     'segmentation',
     'depth',
-    'reconstruction',
     'priors',
+    'reconstruction',
     'optimization',
-    'camera',
-    'datasets',
     'utils'
 ]
