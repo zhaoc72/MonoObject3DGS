@@ -1,13 +1,12 @@
 """
-Loss Functions for MonoObject3DGS
-包含多种损失函数：光度、深度、语义、形状先验等
+Loss Functions
+损失函数
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, Optional
-import lpips
+from typing import Optional, Dict
 
 
 class CompositeLoss(nn.Module):
@@ -17,11 +16,11 @@ class CompositeLoss(nn.Module):
         self,
         lambda_photometric: float = 1.0,
         lambda_depth: float = 0.1,
-        lambda_shape_prior: float = 0.3,
+        lambda_shape_prior: float = 0.5,
         lambda_semantic: float = 0.2,
         lambda_smoothness: float = 0.05,
         lambda_symmetry: float = 0.01,
-        use_lpips: bool = True
+        use_lpips: bool = False
     ):
         super().__init__()
         
@@ -32,378 +31,247 @@ class CompositeLoss(nn.Module):
         self.lambda_smoothness = lambda_smoothness
         self.lambda_symmetry = lambda_symmetry
         
-        # LPIPS感知损失
         self.use_lpips = use_lpips
         if use_lpips:
-            self.lpips_fn = lpips.LPIPS(net='vgg').eval()
-            for param in self.lpips_fn.parameters():
-                param.requires_grad = False
-                
-        print("✓ 损失函数初始化完成")
+            try:
+                import lpips
+                self.lpips_fn = lpips.LPIPS(net='vgg')
+                print("  LPIPS loss enabled")
+            except ImportError:
+                print("  Warning: lpips not installed, disabling LPIPS")
+                self.use_lpips = False
         
+        print(f"✓ CompositeLoss initialized")
+        print(f"  Weights: photo={lambda_photometric}, depth={lambda_depth}, "
+              f"prior={lambda_shape_prior}, semantic={lambda_semantic}")
+    
+    def photometric_loss(
+        self,
+        pred_image: torch.Tensor,
+        target_image: torch.Tensor,
+        mask: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        """光度损失（L1 + SSIM）"""
+        # L1 loss
+        l1_loss = F.l1_loss(pred_image, target_image, reduction='none')
+        
+        if mask is not None:
+            l1_loss = (l1_loss * mask).sum() / (mask.sum() + 1e-6)
+        else:
+            l1_loss = l1_loss.mean()
+        
+        # SSIM loss
+        ssim_loss = 1.0 - self._ssim(pred_image, target_image, mask)
+        
+        # 组合
+        photo_loss = 0.8 * l1_loss + 0.2 * ssim_loss
+        
+        # LPIPS (可选)
+        if self.use_lpips:
+            lpips_loss = self.lpips_fn(pred_image, target_image).mean()
+            photo_loss = 0.7 * photo_loss + 0.3 * lpips_loss
+        
+        return photo_loss
+    
+    def depth_consistency_loss(
+        self,
+        pred_depth: torch.Tensor,
+        target_depth: torch.Tensor,
+        mask: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        """深度一致性损失"""
+        # Scale-invariant depth loss
+        diff = torch.log(pred_depth + 1e-6) - torch.log(target_depth + 1e-6)
+        
+        if mask is not None:
+            diff = diff * mask
+            n = mask.sum() + 1e-6
+        else:
+            n = diff.numel()
+        
+        loss = (diff ** 2).sum() / n - (diff.sum() ** 2) / (n ** 2)
+        
+        return loss
+    
+    def shape_prior_loss(
+        self,
+        pred_points: torch.Tensor,
+        prior_points: torch.Tensor
+    ) -> torch.Tensor:
+        """形状先验损失（简化的Chamfer距离）"""
+        # 简化版本
+        if pred_points.shape[0] != prior_points.shape[0]:
+            min_pts = min(pred_points.shape[0], prior_points.shape[0])
+            pred_points = pred_points[:min_pts]
+            prior_points = prior_points[:min_pts]
+        
+        return F.mse_loss(pred_points, prior_points)
+    
+    def semantic_consistency_loss(
+        self,
+        pred_features: torch.Tensor,
+        target_features: torch.Tensor,
+        mask: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        """语义一致性损失"""
+        # Cosine similarity
+        pred_norm = F.normalize(pred_features, dim=1)
+        target_norm = F.normalize(target_features, dim=1)
+        
+        similarity = (pred_norm * target_norm).sum(dim=1)
+        loss = 1.0 - similarity
+        
+        if mask is not None:
+            loss = (loss * mask).sum() / (mask.sum() + 1e-6)
+        else:
+            loss = loss.mean()
+        
+        return loss
+    
+    def smoothness_loss(
+        self,
+        pointcloud: torch.Tensor,
+        k: int = 8
+    ) -> torch.Tensor:
+        """平滑性损失"""
+        # 简化：使用全局方差
+        center = pointcloud.mean(dim=0)
+        variance = ((pointcloud - center) ** 2).mean()
+        return variance * 0.1
+    
+    def symmetry_loss(
+        self,
+        pointcloud: torch.Tensor,
+        axis: int = 0
+    ) -> torch.Tensor:
+        """对称性损失"""
+        mirrored = pointcloud.clone()
+        mirrored[:, axis] = -mirrored[:, axis]
+        return F.mse_loss(pointcloud, mirrored)
+    
     def forward(
         self,
-        rendered_image: torch.Tensor,
-        gt_image: torch.Tensor,
-        rendered_depth: Optional[torch.Tensor] = None,
-        gt_depth: Optional[torch.Tensor] = None,
-        rendered_semantic: Optional[torch.Tensor] = None,
-        gt_semantic: Optional[torch.Tensor] = None,
-        gaussians: Optional[torch.Tensor] = None,
-        shape_prior_loss: Optional[torch.Tensor] = None,
-        mask: Optional[torch.Tensor] = None
+        pred: Dict,
+        target: Dict,
+        weights: Optional[Dict] = None
     ) -> Dict[str, torch.Tensor]:
         """
         计算总损失
         
         Args:
-            rendered_image: 渲染图像 (B, 3, H, W)
-            gt_image: 真实图像 (B, 3, H, W)
-            rendered_depth: 渲染深度 (B, 1, H, W)
-            gt_depth: 真实深度 (B, 1, H, W)
-            rendered_semantic: 渲染语义 (B, C, H, W)
-            gt_semantic: 真实语义 (B, C, H, W)
-            gaussians: Gaussian点云 (N, 3)
-            shape_prior_loss: 形状先验损失（预计算）
-            mask: 物体mask (B, 1, H, W)
-            
-        Returns:
-            losses: 各项损失的字典
+            pred: 预测结果字典
+            target: 目标字典
+            weights: 可选的动态权重
         """
         losses = {}
-        total_loss = 0.0
+        total_loss = torch.tensor(0.0, device=pred['image'].device)
         
-        # 1. 光度损失
-        photo_loss = self.photometric_loss(
-            rendered_image, gt_image, mask
-        )
-        losses['photometric'] = photo_loss
-        total_loss += self.lambda_photometric * photo_loss
+        # 使用动态权重或默认权重
+        if weights is None:
+            weights = {}
         
-        # 2. 深度一致性损失
-        if rendered_depth is not None and gt_depth is not None:
+        lambda_photo = weights.get('photometric', self.lambda_photometric)
+        lambda_depth = weights.get('depth', self.lambda_depth)
+        lambda_prior = weights.get('shape_prior', self.lambda_shape_prior)
+        lambda_semantic = weights.get('semantic', self.lambda_semantic)
+        lambda_smooth = weights.get('smoothness', self.lambda_smoothness)
+        lambda_sym = weights.get('symmetry', self.lambda_symmetry)
+        
+        # 光度损失
+        if 'image' in pred and 'image' in target and lambda_photo > 0:
+            mask = target.get('mask', None)
+            photo_loss = self.photometric_loss(
+                pred['image'], target['image'], mask
+            )
+            losses['photometric'] = photo_loss
+            total_loss += lambda_photo * photo_loss
+        
+        # 深度损失
+        if 'depth' in pred and 'depth' in target and lambda_depth > 0:
+            mask = target.get('mask', None)
             depth_loss = self.depth_consistency_loss(
-                rendered_depth, gt_depth, mask
+                pred['depth'], target['depth'], mask
             )
             losses['depth'] = depth_loss
-            total_loss += self.lambda_depth * depth_loss
-            
-        # 3. 语义一致性损失
-        if rendered_semantic is not None and gt_semantic is not None:
+            total_loss += lambda_depth * depth_loss
+        
+        # 形状先验损失
+        if 'points' in pred and 'prior_points' in target and lambda_prior > 0:
+            prior_loss = self.shape_prior_loss(
+                pred['points'], target['prior_points']
+            )
+            losses['shape_prior'] = prior_loss
+            total_loss += lambda_prior * prior_loss
+        
+        # 语义损失
+        if 'features' in pred and 'features' in target and lambda_semantic > 0:
+            mask = target.get('mask', None)
             semantic_loss = self.semantic_consistency_loss(
-                rendered_semantic, gt_semantic, mask
+                pred['features'], target['features'], mask
             )
             losses['semantic'] = semantic_loss
-            total_loss += self.lambda_semantic * semantic_loss
-            
-        # 4. 形状先验损失
-        if shape_prior_loss is not None:
-            losses['shape_prior'] = shape_prior_loss
-            total_loss += self.lambda_shape_prior * shape_prior_loss
-            
-        # 5. 平滑性损失
-        if gaussians is not None:
-            smooth_loss = self.smoothness_loss(gaussians)
+            total_loss += lambda_semantic * semantic_loss
+        
+        # 平滑性
+        if 'points' in pred and lambda_smooth > 0:
+            smooth_loss = self.smoothness_loss(pred['points'])
             losses['smoothness'] = smooth_loss
-            total_loss += self.lambda_smoothness * smooth_loss
-            
-        # 6. 对称性损失
-        if gaussians is not None and self.lambda_symmetry > 0:
-            sym_loss = self.symmetry_loss(gaussians)
+            total_loss += lambda_smooth * smooth_loss
+        
+        # 对称性
+        if 'points' in pred and lambda_sym > 0:
+            sym_loss = self.symmetry_loss(pred['points'])
             losses['symmetry'] = sym_loss
-            total_loss += self.lambda_symmetry * sym_loss
-            
+            total_loss += lambda_sym * sym_loss
+        
         losses['total'] = total_loss
         
         return losses
     
-    def photometric_loss(
-        self,
-        rendered: torch.Tensor,
-        target: torch.Tensor,
-        mask: Optional[torch.Tensor] = None
-    ) -> torch.Tensor:
-        """
-        光度损失 = L1 + SSIM + LPIPS
-        """
-        # L1损失
-        l1_loss = F.l1_loss(rendered, target, reduction='none')
-        
-        if mask is not None:
-            l1_loss = (l1_loss * mask).sum() / (mask.sum() + 1e-8)
-        else:
-            l1_loss = l1_loss.mean()
-            
-        # SSIM损失
-        ssim_loss = 1.0 - self.ssim(rendered, target, mask)
-        
-        # 组合L1和SSIM
-        combined_loss = 0.8 * l1_loss + 0.2 * ssim_loss
-        
-        # LPIPS感知损失（如果启用）
-        if self.use_lpips:
-            # LPIPS需要[-1, 1]范围
-            rendered_norm = rendered * 2.0 - 1.0
-            target_norm = target * 2.0 - 1.0
-            
-            with torch.no_grad():
-                lpips_loss = self.lpips_fn(rendered_norm, target_norm).mean()
-            
-            combined_loss = combined_loss + 0.1 * lpips_loss
-            
-        return combined_loss
-    
-    def ssim(
+    def _ssim(
         self,
         img1: torch.Tensor,
         img2: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
         window_size: int = 11
     ) -> torch.Tensor:
-        """
-        结构相似性指数
-        """
-        from pytorch_msssim import ssim
+        """计算SSIM"""
+        C1 = 0.01 ** 2
+        C2 = 0.03 ** 2
         
-        # 计算SSIM
-        ssim_val = ssim(
-            img1, img2,
-            data_range=1.0,
-            size_average=False,
-            win_size=window_size
-        )
+        # 简化版本：使用全局统计
+        mu1 = img1.mean()
+        mu2 = img2.mean()
         
-        if mask is not None:
-            # 在mask区域内平均
-            mask_downsampled = F.avg_pool2d(mask, kernel_size=window_size, stride=1, padding=window_size//2)
-            ssim_val = (ssim_val * mask_downsampled).sum() / (mask_downsampled.sum() + 1e-8)
-        else:
-            ssim_val = ssim_val.mean()
-            
-        return ssim_val
-    
-    def depth_consistency_loss(
-        self,
-        rendered_depth: torch.Tensor,
-        gt_depth: torch.Tensor,
-        mask: Optional[torch.Tensor] = None
-    ) -> torch.Tensor:
-        """
-        深度一致性损失
-        结合L1和梯度损失
-        """
-        # 只在有效深度区域计算
-        valid_mask = (gt_depth > 0) & (gt_depth < 100)
-        if mask is not None:
-            valid_mask = valid_mask & (mask > 0.5)
-            
-        if valid_mask.sum() == 0:
-            return torch.tensor(0.0, device=rendered_depth.device)
-            
-        # L1损失
-        l1_loss = F.l1_loss(
-            rendered_depth[valid_mask],
-            gt_depth[valid_mask]
-        )
+        sigma1_sq = ((img1 - mu1) ** 2).mean()
+        sigma2_sq = ((img2 - mu2) ** 2).mean()
+        sigma12 = ((img1 - mu1) * (img2 - mu2)).mean()
         
-        # 梯度损失（保持边缘）
-        grad_loss = self.gradient_loss(rendered_depth, gt_depth, valid_mask)
+        ssim = ((2 * mu1 * mu2 + C1) * (2 * sigma12 + C2)) / \
+               ((mu1 ** 2 + mu2 ** 2 + C1) * (sigma1_sq + sigma2_sq + C2))
         
-        return l1_loss + 0.5 * grad_loss
-    
-    def gradient_loss(
-        self,
-        pred: torch.Tensor,
-        target: torch.Tensor,
-        mask: torch.Tensor
-    ) -> torch.Tensor:
-        """计算梯度损失"""
-        # 计算x和y方向的梯度
-        pred_grad_x = pred[:, :, :, 1:] - pred[:, :, :, :-1]
-        pred_grad_y = pred[:, :, 1:, :] - pred[:, :, :-1, :]
-        
-        target_grad_x = target[:, :, :, 1:] - target[:, :, :, :-1]
-        target_grad_y = target[:, :, 1:, :] - target[:, :, :-1, :]
-        
-        # 调整mask大小
-        mask_x = mask[:, :, :, 1:]
-        mask_y = mask[:, :, 1:, :]
-        
-        # L1损失
-        loss_x = F.l1_loss(
-            pred_grad_x[mask_x],
-            target_grad_x[mask_x]
-        ) if mask_x.sum() > 0 else 0.0
-        
-        loss_y = F.l1_loss(
-            pred_grad_y[mask_y],
-            target_grad_y[mask_y]
-        ) if mask_y.sum() > 0 else 0.0
-        
-        return loss_x + loss_y
-    
-    def semantic_consistency_loss(
-        self,
-        rendered_semantic: torch.Tensor,
-        gt_semantic: torch.Tensor,
-        mask: Optional[torch.Tensor] = None
-    ) -> torch.Tensor:
-        """
-        语义一致性损失
-        """
-        # 交叉熵损失
-        if gt_semantic.dtype == torch.long:
-            # 标签格式 (B, H, W)
-            loss = F.cross_entropy(
-                rendered_semantic,
-                gt_semantic,
-                reduction='none'
-            )
-        else:
-            # 概率格式 (B, C, H, W)
-            loss = F.kl_div(
-                F.log_softmax(rendered_semantic, dim=1),
-                gt_semantic,
-                reduction='none'
-            ).sum(dim=1)
-            
-        if mask is not None:
-            loss = (loss * mask.squeeze(1)).sum() / (mask.sum() + 1e-8)
-        else:
-            loss = loss.mean()
-            
-        return loss
-    
-    def smoothness_loss(
-        self,
-        gaussians: torch.Tensor,
-        k: int = 8
-    ) -> torch.Tensor:
-        """
-        平滑性损失 - 鼓励局部平滑
-        """
-        from pytorch3d.ops import knn_points
-        
-        # 计算k近邻
-        knn_result = knn_points(
-            gaussians.unsqueeze(0),
-            gaussians.unsqueeze(0),
-            K=k+1
-        )
-        
-        # 排除自己
-        neighbor_dists = knn_result.dists[:, :, 1:]
-        
-        # 平均距离作为平滑性度量
-        loss = neighbor_dists.mean()
-        
-        return loss
-    
-    def symmetry_loss(
-        self,
-        gaussians: torch.Tensor,
-        axis: int = 0
-    ) -> torch.Tensor:
-        """
-        对称性损失 - 鼓励沿某轴对称
-        """
-        # 沿指定轴镜像
-        mirrored = gaussians.clone()
-        mirrored[:, axis] = -mirrored[:, axis]
-        
-        # 计算Chamfer距离
-        from pytorch3d.loss import chamfer_distance
-        
-        cd_loss, _ = chamfer_distance(
-            gaussians.unsqueeze(0),
-            mirrored.unsqueeze(0)
-        )
-        
-        return cd_loss
+        return ssim
 
 
-class EdgeAwareLoss(nn.Module):
-    """边缘感知损失 - 在物体边界处加强约束"""
-    
-    def __init__(self):
-        super().__init__()
-        
-    def forward(
-        self,
-        rendered: torch.Tensor,
-        target: torch.Tensor,
-        mask: torch.Tensor
-    ) -> torch.Tensor:
-        """
-        计算边缘感知损失
-        
-        Args:
-            rendered: 渲染图像 (B, C, H, W)
-            target: 目标图像 (B, C, H, W)
-            mask: 物体mask (B, 1, H, W)
-        """
-        # 检测mask边缘
-        edge_mask = self.detect_edges(mask)
-        
-        # 在边缘处增强L1损失
-        loss = F.l1_loss(rendered, target, reduction='none')
-        
-        # 边缘区域权重更高
-        weighted_loss = loss * (1.0 + 2.0 * edge_mask)
-        
-        return weighted_loss.mean()
-    
-    @staticmethod
-    def detect_edges(mask: torch.Tensor) -> torch.Tensor:
-        """检测mask边缘"""
-        # Sobel算子
-        sobel_x = torch.tensor(
-            [[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]],
-            dtype=torch.float32,
-            device=mask.device
-        ).view(1, 1, 3, 3)
-        
-        sobel_y = torch.tensor(
-            [[-1, -2, -1], [0, 0, 0], [1, 2, 1]],
-            dtype=torch.float32,
-            device=mask.device
-        ).view(1, 1, 3, 3)
-        
-        grad_x = F.conv2d(mask, sobel_x, padding=1)
-        grad_y = F.conv2d(mask, sobel_y, padding=1)
-        
-        edge_magnitude = torch.sqrt(grad_x**2 + grad_y**2)
-        
-        # 归一化
-        edge_mask = (edge_magnitude > 0.1).float()
-        
-        return edge_mask
-
-
+# 测试
 if __name__ == "__main__":
-    # 测试损失函数
-    print("=== 测试组合损失 ===")
+    loss_fn = CompositeLoss()
     
-    loss_fn = CompositeLoss(use_lpips=False)
+    # 测试数据
+    pred = {
+        'image': torch.rand(3, 512, 512),
+        'depth': torch.rand(512, 512),
+        'points': torch.randn(100, 3)
+    }
     
-    # 创建测试数据
-    B, C, H, W = 2, 3, 256, 256
-    rendered = torch.rand(B, C, H, W)
-    target = torch.rand(B, C, H, W)
-    mask = (torch.rand(B, 1, H, W) > 0.3).float()
+    target = {
+        'image': torch.rand(3, 512, 512),
+        'depth': torch.rand(512, 512),
+        'prior_points': torch.randn(100, 3)
+    }
     
-    # 计算损失
-    losses = loss_fn(
-        rendered_image=rendered,
-        gt_image=target,
-        mask=mask
-    )
+    losses = loss_fn(pred, target)
     
-    print("损失:")
+    print("Losses:")
     for k, v in losses.items():
         print(f"  {k}: {v.item():.4f}")
-        
-    print("\n=== 测试边缘感知损失 ===")
-    edge_loss_fn = EdgeAwareLoss()
-    edge_loss = edge_loss_fn(rendered, target, mask)
-    print(f"边缘损失: {edge_loss.item():.4f}")

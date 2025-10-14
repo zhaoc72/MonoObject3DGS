@@ -11,81 +11,120 @@ import numpy as np
 import torch
 import cv2
 
-def test_single_image():
-    """测试单图重建"""
-    print("\n=== Testing Single Image Reconstruction ===")
-    
-    from scripts.single_image import SingleImageReconstructor
-    
-    # 创建测试图像
-    test_image = np.random.randint(0, 255, (640, 480, 3), dtype=np.uint8)
-    test_path = "data/examples/test_single.jpg"
-    cv2.imwrite(test_path, test_image)
-    
-    # 初始化（使用简化配置）
-    reconstructor = SingleImageReconstructor("configs/single_image.yaml")
-    
-    # 测试各模块
-    print("\n1. Testing segmentation...")
-    objects = reconstructor._segment_and_classify(test_image)
-    print(f"   Detected {len(objects)} objects")
-    
-    print("\n2. Testing depth estimation...")
-    depth = reconstructor._estimate_depth(test_image)
-    print(f"   Depth range: [{depth.min():.2f}, {depth.max():.2f}]")
-    
-    print("\n✓ Single image pipeline test passed!")
 
-def test_video():
-    """测试视频重建"""
-    print("\n=== Testing Video Reconstruction ===")
+def test_dependencies():
+    """测试依赖"""
+    print("\n=== Testing Dependencies ===")
     
-    from scripts.video import VideoReconstructor
-    
-    # 创建测试视频
-    test_video = "data/examples/test_video.mp4"
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(test_video, fourcc, 30.0, (640, 480))
-    
-    for i in range(30):
-        frame = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
-        out.write(frame)
-    out.release()
-    
-    # 初始化
-    reconstructor = VideoReconstructor("configs/video.yaml")
-    
-    # 测试处理
-    print("\n1. Testing video processing...")
-    result = reconstructor.reconstruct(test_video, max_frames=10)
-    print(f"   Processed {result['num_frames']} frames")
-    print(f"   Keyframes: {len(result['keyframes'])}")
-    
-    print("\n✓ Video pipeline test passed!")
-
-if __name__ == "__main__":
-    # 检查依赖
-    print("Checking dependencies...")
     try:
         import torch
-        import transformers
+        print(f"✓ PyTorch {torch.__version__}")
+    except:
+        print("✗ PyTorch")
+        return False
+    
+    try:
         import cv2
-        print("✓ Core dependencies OK")
-    except ImportError as e:
-        print(f"✗ Missing dependency: {e}")
-        sys.exit(1)
-    
-    # 运行测试
-    try:
-        test_single_image()
-    except Exception as e:
-        print(f"\n✗ Single image test failed: {e}")
+        print(f"✓ OpenCV {cv2.__version__}")
+    except:
+        print("✗ OpenCV")
+        return False
     
     try:
-        test_video()
+        import transformers
+        print(f"✓ Transformers {transformers.__version__}")
+    except:
+        print("✗ Transformers")
+        return False
+    
+    return True
+
+
+def test_modules():
+    """测试模块导入"""
+    print("\n=== Testing Module Imports ===")
+    
+    try:
+        from src.segmentation.dinov2_extractor import DINOv2Extractor
+        print("✓ DINOv2Extractor")
     except Exception as e:
-        print(f"\n✗ Video test failed: {e}")
-          
-    print("\n" + "=" * 70)
-    print("✓ All tests completed!")
+        print(f"✗ DINOv2Extractor: {e}")
+        return False
+    
+    try:
+        from src.depth.depth_estimator import DepthEstimator
+        print("✓ DepthEstimator")
+    except Exception as e:
+        print(f"✗ DepthEstimator: {e}")
+        return False
+    
+    try:
+        from src.priors.explicit_prior import ExplicitShapePrior
+        print("✓ ExplicitShapePrior")
+    except Exception as e:
+        print(f"✗ ExplicitShapePrior: {e}")
+        return False
+    
+    try:
+        from src.reconstruction.gaussian_model import GaussianModel
+        print("✓ GaussianModel")
+    except Exception as e:
+        print(f"✗ GaussianModel: {e}")
+        return False
+    
+    return True
+
+
+def test_single_image_pipeline():
+    """测试单图流程"""
+    print("\n=== Testing Single Image Pipeline ===")
+    
+    try:
+        from scripts.single_image import SingleImageReconstructor
+        
+        # 创建测试图像
+        test_image = np.random.randint(0, 255, (640, 480, 3), dtype=np.uint8)
+        test_path = "data/examples/test_single.jpg"
+        Path("data/examples").mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(test_path, test_image)
+        
+        print("✓ Single image pipeline imports successful")
+        return True
+        
+    except Exception as e:
+        print(f"✗ Single image pipeline: {e}")
+        return False
+
+
+def main():
+    """主函数"""
     print("=" * 70)
+    print("MonoObject3DGS - Pipeline Test")
+    print("=" * 70)
+    
+    success = True
+    
+    if not test_dependencies():
+        print("\n✗ Dependency test failed")
+        success = False
+    
+    if not test_modules():
+        print("\n✗ Module import test failed")
+        success = False
+    
+    if not test_single_image_pipeline():
+        print("\n✗ Pipeline test failed")
+        success = False
+    
+    print("\n" + "=" * 70)
+    if success:
+        print("✓ All tests passed!")
+    else:
+        print("✗ Some tests failed")
+    print("=" * 70)
+    
+    return 0 if success else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -15,10 +15,10 @@ from tqdm import tqdm
 from typing import Dict, Optional
 import argparse
 
-from src.segmentation.fast_segmenter import FastSegmenter
 from src.segmentation.dinov2_extractor import DINOv2Extractor
+from src.segmentation.sam_segmenter import SAMSegmenter
 from src.segmentation.semantic_classifier import SemanticClassifier
-from src.depth.depth_anything_v2 import DepthAnythingV2
+from src.depth.depth_estimator import DepthEstimator
 from src.depth.depth_refiner import DepthRefiner
 from src.depth.scale_recovery import ScaleRecovery
 from src.priors.explicit_prior import ExplicitShapePrior
@@ -29,6 +29,7 @@ from src.reconstruction.object_gaussian import ObjectGaussian
 from src.reconstruction.scene_gaussian import SceneGaussians
 from src.reconstruction.gaussian_model import GaussianConfig
 from src.optimization.losses import CompositeLoss
+from src.utils.visualization import Visualizer
 
 
 class SingleImageReconstructor:
@@ -36,7 +37,6 @@ class SingleImageReconstructor:
     
     def __init__(self, config_path: str):
         """初始化"""
-        # 加载配置
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
         
@@ -48,7 +48,6 @@ class SingleImageReconstructor:
         print("MonoObject3DGS - Single Image Reconstruction")
         print("=" * 70)
         
-        # 初始化各模块
         self._init_modules()
         
         print("=" * 70)
@@ -64,9 +63,7 @@ class SingleImageReconstructor:
             device=self.device
         )
         
-        print("\n[2/8] Loading segmentation model...")
-        # 单图用完整SAM
-        from src.segmentation.sam_segmenter import SAMSegmenter
+        print("\n[2/8] Loading SAM segmentation model...")
         self.segmenter = SAMSegmenter(
             model_type=self.config['segmentation']['sam']['model_type'],
             checkpoint=self.config['segmentation']['sam']['checkpoint'],
@@ -83,7 +80,8 @@ class SingleImageReconstructor:
         )
         
         print("\n[4/8] Loading depth estimator...")
-        self.depth_estimator = DepthAnythingV2(
+        self.depth_estimator = DepthEstimator(
+            method=self.config['depth']['method'],
             model_size=self.config['depth']['model_size'],
             device=self.device
         )
@@ -102,13 +100,11 @@ class SingleImageReconstructor:
         )
         
         print("\n[7/8] Loading shape priors...")
-        # 显式先验
         self.explicit_prior = ExplicitShapePrior(
             template_dir=self.config['shape_prior']['explicit']['template_dir'],
             device=self.device
         )
         
-        # 隐式先验
         self.implicit_prior = ImplicitShapePrior(
             latent_dim=self.config['shape_prior']['implicit']['latent_dim'],
             encoder_hidden=self.config['shape_prior']['implicit']['encoder_layers'],
@@ -116,11 +112,9 @@ class SingleImageReconstructor:
             num_output_points=self.config['shape_prior']['implicit']['num_output_points']
         ).to(self.device)
         
-        # 为每个类别添加原型
         for category in self.config['classification']['categories']:
             self.implicit_prior.add_category_prototype(category)
         
-        # 先验融合
         prior_config = PriorConfig(
             explicit_weight=self.config['shape_prior']['explicit']['init_weight'],
             implicit_weight=self.config['shape_prior']['implicit']['init_weight'],
@@ -144,19 +138,11 @@ class SingleImageReconstructor:
             )
         )
         
-        # 正则化器
         self.regularizer = ShapePriorRegularizer(device=self.device)
+        self.visualizer = Visualizer()
     
     def reconstruct(self, image_path: str) -> Dict:
-        """
-        完整重建流程
-        
-        Args:
-            image_path: 输入图片路径
-            
-        Returns:
-            result: 重建结果字典
-        """
+        """完整重建流程"""
         print("\n" + "=" * 70)
         print(f"Reconstructing: {image_path}")
         print("=" * 70)
@@ -176,11 +162,11 @@ class SingleImageReconstructor:
         objects = self._segment_and_classify(image_rgb)
         print(f"  Detected {len(objects)} objects:")
         for obj in objects:
-            print(f"    - {obj['category']} (confidence: {obj['confidence']:.2f}, area: {obj['area']})")
+            print(f"    - {obj['category']} (confidence: {obj['confidence']:.2f})")
         
         # Step 3: 深度估计
         print("\n[Step 3/6] Monocular depth estimation...")
-        depth_map = self._estimate_depth(image_rgb)
+        depth_map = self._estimate_depth(image_rgb, objects)
         print(f"  Depth range: [{depth_map.min():.2f}, {depth_map.max():.2f}] meters")
         
         # Step 4: 物体级初始化
@@ -218,12 +204,10 @@ class SingleImageReconstructor:
         """分割并分类"""
         H, W = image.shape[:2]
         
-        # 1. 提取DINOv2特征
         print("  Extracting DINOv2 features...")
         features = self.dinov2.extract_features(image)
         dense_features = self.dinov2.get_dense_features(image, target_size=(H, W))
         
-        # 2. SAM分割
         print("  Running SAM segmentation...")
         masks = self.segmenter.segment_automatic(
             image,
@@ -231,7 +215,6 @@ class SingleImageReconstructor:
         )
         print(f"    Initial masks: {len(masks)}")
         
-        # 3. 特征优化分割
         if self.config['segmentation']['refine']['use_features']:
             print("  Refining with features...")
             masks = self.segmenter.refine_with_features(
@@ -241,7 +224,6 @@ class SingleImageReconstructor:
             )
             print(f"    Refined masks: {len(masks)}")
         
-        # 4. 合并相似mask
         print("  Merging similar masks...")
         masks = self.segmenter.merge_similar_masks(
             masks,
@@ -249,13 +231,11 @@ class SingleImageReconstructor:
         )
         print(f"    Final masks: {len(masks)}")
         
-        # 5. 语义分类
         print("  Classifying objects...")
         objects = []
         for i, mask_dict in enumerate(masks):
             x, y, w, h = mask_dict['bbox']
             
-            # 裁剪物体区域
             x1, y1 = max(0, x), max(0, y)
             x2, y2 = min(W, x + w), min(H, y + h)
             
@@ -265,7 +245,6 @@ class SingleImageReconstructor:
             crop = image[y1:y2, x1:x2]
             crop_mask = mask_dict['segmentation'][y1:y2, x1:x2]
             
-            # 分类
             predictions = self.classifier.classify(
                 image_crop=crop,
                 mask=crop_mask,
@@ -283,21 +262,19 @@ class SingleImageReconstructor:
         
         return objects
     
-    def _estimate_depth(self, image: np.ndarray) -> np.ndarray:
+    def _estimate_depth(self, image: np.ndarray, objects: list) -> np.ndarray:
         """估计并优化深度"""
-        # 1. 深度估计
         print("  Estimating depth...")
         depth = self.depth_estimator.estimate(image)
         
-        # 2. 深度优化
         print("  Refining depth...")
         depth = self.depth_refiner.refine(depth, image)
         
-        # 3. 尺度恢复（使用物体先验）
         print("  Recovering metric scale...")
-        # 先临时创建objects用于尺度恢复
-        # 这里简化：使用默认尺度或之前的objects
-        # 实际应该在分割后再做尺度恢复
+        camera_params = self._get_camera_params(image.shape[1], image.shape[0])
+        depth, scale_factor = self.scale_recovery.recover_scale(
+            depth, objects, camera_params
+        )
         
         return depth
     
@@ -313,10 +290,8 @@ class SingleImageReconstructor:
             obj_id = obj['id']
             category = obj['category']
             
-            # 获取形状先验
             shape_prior = self.explicit_prior.get_template(category)
             
-            # 创建物体Gaussian
             obj_gaussian = ObjectGaussian(
                 object_id=obj_id,
                 category=category,
@@ -328,7 +303,6 @@ class SingleImageReconstructor:
                 shape_prior=shape_prior
             )
             
-            # 从mask和深度初始化
             try:
                 obj_gaussian.initialize_from_mask_depth(
                     mask=obj['segmentation'],
@@ -337,7 +311,6 @@ class SingleImageReconstructor:
                     camera_params=camera_params
                 )
                 
-                # 添加到场景
                 self.scene_gaussians.add_object(obj_id, obj_gaussian)
                 
             except Exception as e:
@@ -353,26 +326,31 @@ class SingleImageReconstructor:
         """使用形状先验约束优化"""
         iterations = self.config['reconstruction']['optimization']['iterations']
         
-        # 设置优化器
         optimizers = {}
         for obj_id, obj_gaussian in self.scene_gaussians.objects.items():
             param_groups = [
                 {'params': [obj_gaussian._xyz], 
-                 'lr': self.config['reconstruction']['gaussian']['position_lr'], 'name': 'xyz'},
+                 'lr': self.config['reconstruction']['gaussian']['position_lr'], 
+                 'name': 'xyz'},
                 {'params': [obj_gaussian._features_dc], 
-                 'lr': self.config['reconstruction']['gaussian']['feature_lr'], 'name': 'f_dc'},
+                 'lr': self.config['reconstruction']['gaussian']['feature_lr'], 
+                 'name': 'f_dc'},
                 {'params': [obj_gaussian._features_rest], 
-                 'lr': self.config['reconstruction']['gaussian']['feature_lr'] / 20.0, 'name': 'f_rest'},
+                 'lr': self.config['reconstruction']['gaussian']['feature_lr'] / 20.0, 
+                 'name': 'f_rest'},
                 {'params': [obj_gaussian._opacity], 
-                 'lr': self.config['reconstruction']['gaussian']['opacity_lr'], 'name': 'opacity'},
+                 'lr': self.config['reconstruction']['gaussian']['opacity_lr'], 
+                 'name': 'opacity'},
                 {'params': [obj_gaussian._scaling], 
-                 'lr': self.config['reconstruction']['gaussian']['scaling_lr'], 'name': 'scaling'},
+                 'lr': self.config['reconstruction']['gaussian']['scaling_lr'], 
+                 'name': 'scaling'},
                 {'params': [obj_gaussian._rotation], 
-                 'lr': self.config['reconstruction']['gaussian']['rotation_lr'], 'name': 'rotation'}
+                 'lr': self.config['reconstruction']['gaussian']['rotation_lr'], 
+                 'name': 'rotation'}
             ]
             optimizers[obj_id] = torch.optim.Adam(param_groups)
+            obj_gaussian.optimizer = optimizers[obj_id]
         
-        # 损失函数
         loss_fn = CompositeLoss(
             lambda_photometric=self.config['reconstruction']['loss']['photometric'],
             lambda_depth=self.config['reconstruction']['loss']['depth_consistency'],
@@ -380,13 +358,11 @@ class SingleImageReconstructor:
             lambda_semantic=self.config['reconstruction']['loss']['semantic_consistency'],
             lambda_smoothness=self.config['reconstruction']['loss']['smoothness'],
             lambda_symmetry=self.config['reconstruction']['loss']['symmetry'],
-            use_lpips=False  # 单图优化可以不用LPIPS
+            use_lpips=False
         ).to(self.device)
         
-        # 优化循环
         pbar = tqdm(range(iterations), desc="  Optimizing")
         
-        # 单视角参数（固定）
         viewing_coverage = self.config['shape_prior']['adaptive']['viewing_coverage']
         seg_confidence = 0.8
         recon_uncertainty = 0.7
@@ -398,7 +374,6 @@ class SingleImageReconstructor:
                 optimizer = optimizers[obj_id]
                 optimizer.zero_grad()
                 
-                # 计算形状先验损失
                 _, weights_info = self.prior_fusion.fuse_priors(
                     obj_gaussian.get_xyz,
                     obj_gaussian.category,
@@ -413,7 +388,6 @@ class SingleImageReconstructor:
                     weights_info
                 )
                 
-                # 正则化损失
                 reg_losses = self.regularizer.compute_combined_regularization(
                     obj_gaussian.get_xyz,
                     weights={
@@ -423,30 +397,29 @@ class SingleImageReconstructor:
                     }
                 )
                 
-                # 总损失
                 loss = shape_prior_loss + reg_losses['total']
                 
-                # 反向传播
                 loss.backward()
                 optimizer.step()
                 
                 total_loss += loss.item()
                 
-                # 定期致密化
                 if self._should_densify(iter_num):
-                    obj_gaussian.densify_and_prune(
-                        max_grad=self.config['reconstruction']['optimization']['densify_grad_threshold'],
-                        min_opacity=0.005,
-                        extent=5.0,
-                        max_screen_size=20
-                    )
+                    try:
+                        obj_gaussian.densify_and_prune(
+                            max_grad=self.config['reconstruction']['optimization']['densify_grad_threshold'],
+                            min_opacity=0.005,
+                            extent=5.0,
+                            max_screen_size=20
+                        )
+                    except:
+                        pass
                 
-                # 定期重置不透明度
                 if self._should_reset_opacity(iter_num):
                     obj_gaussian.reset_opacity()
             
             if iter_num % 100 == 0:
-                pbar.set_postfix({'loss': total_loss / len(self.scene_gaussians.objects)})
+                pbar.set_postfix({'loss': total_loss / max(1, len(self.scene_gaussians.objects))})
     
     def _should_densify(self, iter_num: int) -> bool:
         """是否应该致密化"""
@@ -483,62 +456,20 @@ class SingleImageReconstructor:
         objects: list
     ):
         """保存重建结果"""
-        # 1. 保存场景
         self.scene_gaussians.save(str(output_path / 'scene'))
         
-        # 2. 保存深度图
-        depth_vis = (depth_map - depth_map.min()) / (depth_map.max() - depth_map.min() + 1e-8)
-        depth_vis = (depth_vis * 255).astype(np.uint8)
-        depth_vis = cv2.applyColorMap(depth_vis, cv2.COLORMAP_TURBO)
+        depth_vis = self.visualizer.visualize_depth(depth_map)
         cv2.imwrite(str(output_path / 'depth.png'), depth_vis)
         
-        # 3. 保存分割可视化
-        vis = self._visualize_segmentation(image, objects)
-        cv2.imwrite(str(output_path / 'segmentation.png'), cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
+        seg_vis = self.visualizer.visualize_masks(image, objects)
+        cv2.imwrite(str(output_path / 'segmentation.png'), cv2.cvtColor(seg_vis, cv2.COLOR_RGB2BGR))
         
-        # 4. 保存统计
         stats = self.scene_gaussians.get_statistics()
         import json
         with open(output_path / 'statistics.json', 'w') as f:
-            json.dump(stats, f, indent=2)
+            json.dump(stats, f, indent=2, default=lambda x: float(x) if isinstance(x, (np.float32, np.float64, np.int64)) else x)
         
         print(f"  Saved to: {output_path}")
-    
-    def _visualize_segmentation(self, image: np.ndarray, objects: list) -> np.ndarray:
-        """可视化分割结果"""
-        vis = image.copy()
-        overlay = np.zeros_like(image)
-        
-        np.random.seed(42)
-        colors = np.random.randint(50, 255, (len(objects), 3))
-        
-        for i, obj in enumerate(objects):
-            mask = obj['segmentation']
-            color = colors[i]
-            
-            # 填充
-            overlay[mask] = color * 0.6 + overlay[mask] * 0.4
-            
-            # 轮廓
-            contours, _ = cv2.findContours(
-                mask.astype(np.uint8),
-                cv2.RETR_EXTERNAL,
-                cv2.CHAIN_APPROX_SIMPLE
-            )
-            cv2.drawContours(vis, contours, -1, color.tolist(), 2)
-            
-            # 标签
-            x, y, w, h = obj['bbox']
-            label = f"{obj['category']} ({obj['confidence']:.2f})"
-            
-            cv2.rectangle(vis, (x, y), (x + w, y + h), color.tolist(), 2)
-            cv2.putText(
-                vis, label, (x, y - 5),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2
-            )
-        
-        vis = cv2.addWeighted(vis, 0.7, overlay, 0.3, 0)
-        return vis
 
 
 def main():
@@ -550,14 +481,11 @@ def main():
     
     args = parser.parse_args()
     
-    # 初始化重建器
     reconstructor = SingleImageReconstructor(args.config)
     
-    # 如果指定输出目录，覆盖配置
     if args.output:
         reconstructor.output_dir = Path(args.output)
     
-    # 执行重建
     result = reconstructor.reconstruct(args.image)
     
     print("\n✓ Done! Check results in:", result['output_dir'])

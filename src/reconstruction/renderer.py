@@ -1,313 +1,133 @@
 """
 Gaussian Renderer
-3D Gaussian Splatting渲染器
-封装diff-gaussian-rasterization库
+简化的Gaussian渲染器
 """
 
 import torch
-import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 
 class GaussianRenderer:
-    """
-    3D Gaussian Splatting渲染器
-    使用可微分光栅化渲染Gaussians
-    """
+    """简化的Gaussian渲染器"""
     
-    def __init__(
-        self,
-        image_height: int = 512,
-        image_width: int = 512,
-        device: str = "cuda"
-    ):
-        """
-        Args:
-            image_height: 渲染图像高度
-            image_width: 渲染图像宽度
-            device: 计算设备
-        """
-        self.image_height = image_height
-        self.image_width = image_width
+    def __init__(self, device: str = "cuda"):
         self.device = device
-        
-        # 尝试导入diff-gaussian-rasterization
-        try:
-            from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
-            self.rasterization_available = True
-            self.GaussianRasterizationSettings = GaussianRasterizationSettings
-            self.GaussianRasterizer = GaussianRasterizer
-            print("✓ GaussianRenderer初始化: 使用diff-gaussian-rasterization")
-        except ImportError:
-            self.rasterization_available = False
-            print("警告: diff-gaussian-rasterization未安装，使用简化渲染器")
+        print("✓ GaussianRenderer initialized (simplified)")
     
     def render(
         self,
-        gaussians: Dict[str, torch.Tensor],
+        gaussians,
         camera_params: Dict,
-        background_color: Optional[torch.Tensor] = None
-    ) -> Dict[str, torch.Tensor]:
+        background: Optional[torch.Tensor] = None
+    ) -> Dict:
         """
-        渲染Gaussians
+        渲染Gaussian
         
-        Args:
-            gaussians: Gaussian参数字典，包含:
-                - xyz: 位置 (N, 3)
-                - features_dc: 球谐DC (N, 1, 3)
-                - features_rest: 球谐其余 (N, K, 3)
-                - scaling: 尺度 (N, 3) [已exp]
-                - rotation: 旋转 (N, 4) [已归一化]
-                - opacity: 不透明度 (N, 1) [已sigmoid]
-            camera_params: 相机参数
-            background_color: 背景颜色
-            
-        Returns:
-            rendered: 渲染结果
-                - rgb: RGB图像 (3, H, W)
-                - depth: 深度图 (1, H, W)
-                - alpha: Alpha通道 (1, H, W)
+        这是简化版本，实际生产环境应使用diff-gaussian-rasterization
         """
-        if self.rasterization_available:
-            return self._render_rasterization(gaussians, camera_params, background_color)
-        else:
-            return self._render_simple(gaussians, camera_params, background_color)
-    
-    def _render_rasterization(
-        self,
-        gaussians: Dict[str, torch.Tensor],
-        camera_params: Dict,
-        background_color: Optional[torch.Tensor] = None
-    ) -> Dict[str, torch.Tensor]:
-        """使用diff-gaussian-rasterization渲染"""
+        # 获取Gaussian参数
+        xyz = gaussians.get_xyz
+        features = gaussians.get_features
+        opacity = gaussians.get_opacity
+        scaling = gaussians.get_scaling
+        rotation = gaussians.get_rotation
         
-        # 设置背景
-        if background_color is None:
-            background_color = torch.ones(3, device=self.device)
+        # 简化渲染：投影到2D并栅格化
+        H, W = camera_params.get('height', 512), camera_params.get('width', 512)
         
-        # 提取参数
-        xyz = gaussians['xyz']
-        features_dc = gaussians['features_dc']
-        features_rest = gaussians.get('features_rest', torch.zeros_like(features_dc))
-        scaling = gaussians['scaling']
-        rotation = gaussians['rotation']
-        opacity = gaussians['opacity']
-        
-        # 合并特征
-        features = torch.cat([features_dc, features_rest], dim=1)
-        
-        # 相机参数
-        viewmatrix = camera_params['view_matrix']  # (4, 4)
-        projmatrix = camera_params['proj_matrix']   # (4, 4)
-        cam_pos = camera_params['camera_center']    # (3,)
-        
-        fx = camera_params['fx']
-        fy = camera_params['fy']
-        
-        # 设置光栅化参数
-        raster_settings = self.GaussianRasterizationSettings(
-            image_height=self.image_height,
-            image_width=self.image_width,
-            tanfovx=self.image_width / (2 * fx),
-            tanfovy=self.image_height / (2 * fy),
-            bg=background_color,
-            scale_modifier=1.0,
-            viewmatrix=viewmatrix,
-            projmatrix=projmatrix,
-            sh_degree=1,  # 简化，使用1阶球谐
-            campos=cam_pos,
-            prefiltered=False,
-            debug=False
-        )
-        
-        # 创建光栅化器
-        rasterizer = self.GaussianRasterizer(raster_settings=raster_settings)
-        
-        # 渲染
-        rendered_image, radii = rasterizer(
-            means3D=xyz,
-            means2D=torch.zeros_like(xyz[:, :2]),  # 屏幕空间坐标（内部计算）
-            shs=features,
-            colors_precomp=None,
-            opacities=opacity,
-            scales=scaling,
-            rotations=rotation,
-            cov3D_precomp=None
-        )
-        
-        # 简单的深度渲染（需要扩展）
-        depth = self._render_depth_simple(xyz, viewmatrix, opacity)
-        
-        return {
-            'rgb': rendered_image,
-            'depth': depth,
-            'alpha': rendered_image.sum(dim=0, keepdim=True).clamp(0, 1),
-            'radii': radii
-        }
-    
-    def _render_simple(
-        self,
-        gaussians: Dict[str, torch.Tensor],
-        camera_params: Dict,
-        background_color: Optional[torch.Tensor] = None
-    ) -> Dict[str, torch.Tensor]:
-        """
-        简化渲染器（当diff-gaussian-rasterization不可用时）
-        使用简单的点云投影
-        """
-        xyz = gaussians['xyz']
-        opacity = gaussians['opacity']
-        
-        # 获取颜色（从球谐DC分量）
-        features_dc = gaussians['features_dc']
-        C0 = 0.28209479177387814
-        colors = features_dc.squeeze(1) * C0 + 0.5
-        colors = colors.clamp(0, 1)
-        
-        # 投影到图像平面
-        viewmatrix = camera_params['view_matrix']
-        
-        # 转换到相机坐标系
-        xyz_h = torch.cat([xyz, torch.ones_like(xyz[:, :1])], dim=1)  # (N, 4)
-        xyz_cam = (viewmatrix @ xyz_h.T).T  # (N, 4)
-        
-        # 透视投影
-        fx = camera_params['fx']
-        fy = camera_params['fy']
-        cx = camera_params.get('cx', self.image_width / 2)
-        cy = camera_params.get('cy', self.image_height / 2)
-        
-        x_proj = xyz_cam[:, 0] / (xyz_cam[:, 2] + 1e-6) * fx + cx
-        y_proj = xyz_cam[:, 1] / (xyz_cam[:, 2] + 1e-6) * fy + cy
-        z_proj = xyz_cam[:, 2]
-        
-        # 过滤在图像外的点
-        valid = (x_proj >= 0) & (x_proj < self.image_width) & \
-                (y_proj >= 0) & (y_proj < self.image_height) & \
-                (z_proj > 0)
+        # 投影到相机坐标
+        projected = self._project_to_camera(xyz, camera_params)
         
         # 创建图像
-        rendered_rgb = torch.ones(3, self.image_height, self.image_width, device=self.device)
-        rendered_depth = torch.zeros(1, self.image_height, self.image_width, device=self.device)
+        if background is None:
+            background = torch.zeros((H, W, 3), device=self.device)
         
-        if background_color is not None:
-            rendered_rgb = background_color.view(3, 1, 1).expand(3, self.image_height, self.image_width)
+        rendered_image = background.clone()
+        rendered_depth = torch.zeros((H, W), device=self.device)
         
-        if valid.any():
-            x_proj = x_proj[valid].long()
-            y_proj = y_proj[valid].long()
-            z_proj = z_proj[valid]
-            colors_valid = colors[valid]
-            opacity_valid = opacity[valid].squeeze()
+        # 简化：基于深度排序并splat
+        depths = projected[:, 2]
+        sorted_indices = torch.argsort(depths, descending=True)
+        
+        # 转换特征为RGB
+        colors = self._sh_to_rgb(features[:, 0, :])
+        
+        for idx in sorted_indices[:1000]:  # 限制数量避免过慢
+            x, y, z = projected[idx]
             
-            # 简单的splat（可以改进）
-            for i in range(len(x_proj)):
-                x, y = x_proj[i], y_proj[i]
-                if 0 <= x < self.image_width and 0 <= y < self.image_height:
-                    # Alpha混合
-                    alpha = opacity_valid[i]
-                    rendered_rgb[:, y, x] = (1 - alpha) * rendered_rgb[:, y, x] + alpha * colors_valid[i]
-                    rendered_depth[:, y, x] = max(rendered_depth[:, y, x], z_proj[i])
+            if z <= 0:
+                continue
+            
+            px, py = int(x), int(y)
+            
+            if 0 <= px < W and 0 <= py < H:
+                alpha = opacity[idx].item()
+                color = colors[idx]
+                
+                # Alpha混合
+                rendered_image[py, px] = (
+                    alpha * color + (1 - alpha) * rendered_image[py, px]
+                )
+                rendered_depth[py, px] = z
         
         return {
-            'rgb': rendered_rgb,
+            'image': rendered_image,
             'depth': rendered_depth,
-            'alpha': (rendered_depth > 0).float()
+            'projected': projected
         }
     
-    def _render_depth_simple(
+    def _project_to_camera(
         self,
-        xyz: torch.Tensor,
-        viewmatrix: torch.Tensor,
-        opacity: torch.Tensor
+        points_3d: torch.Tensor,
+        camera_params: Dict
     ) -> torch.Tensor:
-        """简单的深度渲染"""
-        # 转换到相机坐标
-        xyz_h = torch.cat([xyz, torch.ones_like(xyz[:, :1])], dim=1)
-        xyz_cam = (viewmatrix @ xyz_h.T).T
-        depths = xyz_cam[:, 2]
+        """投影3D点到相机"""
+        fx = camera_params.get('fx', 525.0)
+        fy = camera_params.get('fy', 525.0)
+        cx = camera_params.get('cx', 320.0)
+        cy = camera_params.get('cy', 240.0)
         
-        # 加权平均深度（简化）
-        weights = opacity.squeeze()
-        weighted_depth = (depths * weights).sum() / (weights.sum() + 1e-6)
+        x = points_3d[:, 0]
+        y = points_3d[:, 1]
+        z = points_3d[:, 2]
         
-        depth_map = torch.ones(1, self.image_height, self.image_width, device=self.device) * weighted_depth
+        u = fx * x / (z + 1e-6) + cx
+        v = fy * y / (z + 1e-6) + cy
         
-        return depth_map
-
-
-def create_camera_params(
-    view_matrix: torch.Tensor,
-    proj_matrix: torch.Tensor,
-    camera_center: torch.Tensor,
-    fx: float,
-    fy: float,
-    cx: Optional[float] = None,
-    cy: Optional[float] = None
-) -> Dict:
-    """
-    创建相机参数字典
+        projected = torch.stack([u, v, z], dim=1)
+        
+        return projected
     
-    Args:
-        view_matrix: 视图矩阵 (4, 4)
-        proj_matrix: 投影矩阵 (4, 4)
-        camera_center: 相机中心 (3,)
-        fx, fy: 焦距
-        cx, cy: 主点
-        
-    Returns:
-        camera_params: 相机参数字典
-    """
-    return {
-        'view_matrix': view_matrix,
-        'proj_matrix': proj_matrix,
-        'camera_center': camera_center,
-        'fx': fx,
-        'fy': fy,
-        'cx': cx,
-        'cy': cy
-    }
+    def _sh_to_rgb(self, sh: torch.Tensor) -> torch.Tensor:
+        """球谐系数转RGB"""
+        C0 = 0.28209479177387814
+        rgb = sh * C0 + 0.5
+        return torch.clamp(rgb, 0, 1)
 
 
+# 测试
 if __name__ == "__main__":
-    # 测试代码
-    print("=== 测试GaussianRenderer ===")
+    from src.reconstruction.gaussian_model import GaussianModel, GaussianConfig
     
-    # 创建渲染器
-    renderer = GaussianRenderer(image_height=256, image_width=256, device="cpu")
+    renderer = GaussianRenderer(device="cpu")
     
-    # 创建测试Gaussians
-    N = 1000
-    gaussians = {
-        'xyz': torch.randn(N, 3),
-        'features_dc': torch.randn(N, 1, 3),
-        'features_rest': torch.zeros(N, 0, 3),
-        'scaling': torch.ones(N, 3) * 0.01,
-        'rotation': torch.cat([torch.ones(N, 1), torch.zeros(N, 3)], dim=1),
-        'opacity': torch.ones(N, 1) * 0.5
+    config = GaussianConfig()
+    model = GaussianModel(config)
+    
+    points = torch.randn(100, 3) * 2
+    points[:, 2] += 5  # 移到相机前方
+    colors = torch.rand(100, 3)
+    
+    model.create_from_points(points, colors)
+    
+    camera_params = {
+        'fx': 525.0, 'fy': 525.0,
+        'cx': 256.0, 'cy': 256.0,
+        'width': 512, 'height': 512
     }
     
-    # 创建相机参数
-    view_matrix = torch.eye(4)
-    view_matrix[2, 3] = -5  # 相机在z=-5位置
-    
-    proj_matrix = torch.eye(4)
-    
-    camera_params = create_camera_params(
-        view_matrix=view_matrix,
-        proj_matrix=proj_matrix,
-        camera_center=torch.tensor([0, 0, -5]),
-        fx=525.0,
-        fy=525.0
-    )
-    
-    # 渲染
-    rendered = renderer.render(gaussians, camera_params)
-    
-    print(f"渲染结果:")
-    print(f"  RGB形状: {rendered['rgb'].shape}")
-    print(f"  深度形状: {rendered['depth'].shape}")
-    print(f"  Alpha形状: {rendered['alpha'].shape}")
-    
-    print("\n测试完成！")
+    result = renderer.render(model, camera_params)
+    print(f"Rendered image shape: {result['image'].shape}")
+    print(f"Rendered depth shape: {result['depth'].shape}")
