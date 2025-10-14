@@ -1,19 +1,36 @@
 #!/bin/bash
 
-echo "Downloading pretrained models..."
+echo "========================================"
+echo "Downloading V2 Models"
+echo "========================================"
+echo ""
 
 mkdir -p data/checkpoints
 cd data/checkpoints
 
-# SAM模型
-if [ ! -f "sam_vit_h_4b8939.pth" ]; then
-    echo "[1/2] Downloading SAM ViT-H (2.4GB)..."
+# SAM 2模型
+echo "[1/3] Downloading SAM 2 models..."
+if [ ! -f "sam2_hiera_large.pt" ]; then
+    echo "  Downloading SAM 2 Large (2.9GB)..."
     wget -q --show-progress \
-        https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth
+        https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_large.pt
 fi
 
 echo ""
-echo "✓ All models downloaded!"
+echo "[2/3] Depth Anything V2 models..."
+echo "  Note: Will be downloaded automatically from Hugging Face"
+echo "  Models: vits, vitb, vitl (metric versions)"
+
 echo ""
-echo "Note: DINOv2 and Depth Anything V2 will be downloaded automatically"
-echo "from Hugging Face on first use."
+echo "[3/3] DINOv2 models..."
+echo "  Note: Will be downloaded automatically from Hugging Face"
+echo "  Model: facebook/dinov2-large (1.3GB)"
+
+echo ""
+echo "✓ Model download configured!"
+echo ""
+echo "Models will auto-download on first use:"
+echo "  - DINOv2 Large: ~1.3GB"
+echo "  - SAM 2 Large: ~2.9GB"
+echo "  - Depth Anything V2: ~1.5GB"
+echo ""

@@ -109,7 +109,7 @@ class Visualizer:
         fig = plt.figure(figsize=(10, 8))
         ax = fig.add_subplot(111, projection='3d')
         
-        if colors is None
+        if colors is None:
             ax.scatter(
                     points[:, 0], points[:, 1], points[:, 2],
                     c='b', marker='.', s=1, alpha=0.6

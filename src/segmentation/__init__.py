@@ -4,7 +4,7 @@ Segmentation Module
 """
 
 from .dinov2_extractor import DINOv2Extractor
-from .sam_segmenter import SAMSegmenter
+from .sam2_segmenter import SAMSegmenter
 from .fast_segmenter import FastSegmenter
 from .semantic_classifier import SemanticClassifier
 from .object_tracker import ObjectTracker

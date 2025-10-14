@@ -1,49 +1,69 @@
-# Single Image Reconstruction Configuration
+# Single Image Reconstruction - V2 Configuration
 experiment:
-  name: "single_image_reconstruction"
+  name: "single_image_v2"
   output_dir: "experiments"
   device: "cuda"
   seed: 42
 
-# Segmentation
+# DINOv2 V2
 segmentation:
   dinov2:
-    model_name: "facebook/dinov2-base"
-    feature_dim: 768
+    model_name: "facebook/dinov2-large"  # 升级到large
+    feature_dim: 1024
     patch_size: 14
+    use_registers: true  # 使用register tokens
+    enable_xformers: true  # Flash Attention加速
+    multi_scale: true  # 多尺度特征
+    scales: [1.0, 0.75, 0.5]
   
-  sam:
-    model_type: "vit_h"
-    checkpoint: "data/checkpoints/sam_vit_h_4b8939.pth"
+  # SAM 2
+  sam2:
+    model_size: "large"  # tiny/small/base/large
+    checkpoint: "data/checkpoints/sam2_hiera_large.pt"
+    mode: "image"
     points_per_side: 32
     pred_iou_thresh: 0.88
-    stability_thresh: 0.92
+    stability_thresh: 0.95
     min_mask_area: 500
   
+  # 特征优化分割
   refine:
     use_features: true
-    similarity_threshold: 0.7
+    similarity_threshold: 0.75  # 提高阈值
     merge_iou_threshold: 0.5
     smooth_boundary: true
+    multi_scale_refine: true  # 多尺度优化
 
-# Depth Estimation
+# Depth Anything V2
 depth:
   method: "depth_anything_v2"
-  model_size: "base"
+  model_size: "vitl"  # vits/vitb/vitl/vitg
+  metric_depth: true  # 启用度量深度
+  max_depth: 20.0
   
+  # 深度优化
   refine:
     bilateral_filter: true
     edge_preserving: true
     remove_outliers: true
+    confidence_weighted: true  # 基于置信度加权
   
+  # 多尺度深度
+  multi_scale:
+    enabled: true
+    scales: [1.0, 0.75, 0.5]
+    fusion_method: "weighted"  # mean/weighted/median
+  
+  # 尺度恢复
   scale_recovery:
     method: "shape_prior"
     reference_objects: ["chair", "table", "sofa", "bed"]
+    use_confidence: true
 
-# Classification
+# 分类
 classification:
   method: "clip"
-  model_name: "openai/clip-vit-base-patch32"
+  model_name: "openai/clip-vit-large-patch14"  # 升级到large
   categories:
     - chair
     - table
@@ -58,7 +78,7 @@ classification:
     - door
     - window
 
-# Shape Prior
+# 形状先验
 shape_prior:
   explicit:
     enabled: true
@@ -69,20 +89,22 @@ shape_prior:
   implicit:
     enabled: true
     latent_dim: 256
-    encoder_layers: [64, 128, 256, 512]
-    decoder_layers: [256, 512, 1024]
-    num_output_points: 2048
+    encoder_layers: [64, 128, 256, 512, 1024]  # 更深
+    decoder_layers: [256, 512, 1024, 2048]
+    num_output_points: 4096  # 更多点
     init_weight: 0.5
   
+  # 自适应融合
   adaptive:
     confidence_based: true
     min_prior_weight: 0.1
     max_prior_weight: 0.9
     viewing_coverage: 0.3
-    segmentation_confidence: 0.8
-    reconstruction_uncertainty: 0.7
+    segmentation_confidence: 0.85  # 提高置信度
+    reconstruction_uncertainty: 0.6
+    use_depth_confidence: true  # 使用深度置信度
 
-# 3D Gaussian Splatting
+# 3D重建
 reconstruction:
   gaussian:
     sh_degree: 3
@@ -95,28 +117,30 @@ reconstruction:
     rotation_lr: 0.001
   
   optimization:
-    iterations: 2000
+    iterations: 3000  # 增加迭代
     densify_from_iter: 500
-    densify_until_iter: 1500
+    densify_until_iter: 2000
     densify_interval: 100
     densify_grad_threshold: 0.0002
     opacity_reset_interval: 3000
   
+  # 损失权重
   loss:
     photometric: 1.0
-    depth_consistency: 0.1
+    depth_consistency: 0.15  # 提高深度权重
     shape_prior: 0.6
-    semantic_consistency: 0.2
+    semantic_consistency: 0.25
     smoothness: 0.05
     symmetry: 0.02
+    depth_confidence_weight: true  # 深度置信度加权
 
-# Camera
+# 相机
 camera:
   fov: 60.0
   near: 0.1
   far: 100.0
 
-# Rendering
+# 渲染
 rendering:
   image_size: [512, 512]
   novel_views:

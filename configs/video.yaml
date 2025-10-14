@@ -1,58 +1,86 @@
-# Video Reconstruction Configuration
+# Video Reconstruction - V2 Configuration
 experiment:
-  name: "video_reconstruction"
+  name: "video_v2"
   output_dir: "experiments"
   device: "cuda"
   seed: 42
 
+# DINOv2 V2
 segmentation:
   dinov2:
-    model_name: "facebook/dinov2-base"
-    feature_dim: 768
+    model_name: "facebook/dinov2-large"
+    feature_dim: 1024
+    use_registers: true
+    enable_xformers: true
   
-  sam:
-    model_type: "fastsam"
-    checkpoint: "data/checkpoints/FastSAM-x.pt"
+  # SAM 2 Video Mode
+  sam2:
+    model_size: "large"
+    checkpoint: "data/checkpoints/sam2_hiera_large.pt"
+    mode: "video"  # 视频模式
     min_mask_area: 500
+    
+    # 视频追踪配置
+    video_tracking:
+      enabled: true
+      offload_to_cpu: true
+      async_loading: true
+      max_frame_num_to_track: 100
+      reverse_propagation: false
   
+  # 异步处理
   async:
     enabled: true
     keyframe_interval: 10
     buffer_size: 5
   
+  # 物体追踪
   tracking:
     enabled: true
     max_age: 30
     min_hits: 3
     iou_threshold: 0.3
-    feature_threshold: 0.7
+    feature_threshold: 0.75
   
   refine:
     use_features: true
-    similarity_threshold: 0.7
+    similarity_threshold: 0.75
     merge_iou_threshold: 0.5
 
+# Depth Anything V2
 depth:
   method: "depth_anything_v2"
-  model_size: "base"
+  model_size: "vitl"
+  metric_depth: true
+  max_depth: 20.0
   
   refine:
     bilateral_filter: true
     edge_preserving: true
     remove_outliers: true
+    confidence_weighted: true
   
+  # 时序一致性
   temporal:
     enabled: true
-    window_size: 5
-    consistency_weight: 0.3
+    window_size: 7  # 增加窗口
+    consistency_weight: 0.4
+    confidence_fusion: true  # 基于置信度融合
+  
+  multi_scale:
+    enabled: true
+    scales: [1.0, 0.75]
+    fusion_method: "weighted"
   
   scale_recovery:
     method: "shape_prior"
     reference_objects: ["chair", "table", "sofa"]
+    use_confidence: true
 
+# 分类
 classification:
   method: "clip"
-  model_name: "openai/clip-vit-base-patch32"
+  model_name: "openai/clip-vit-large-patch14"
   categories:
     - chair
     - table
@@ -64,9 +92,8 @@ classification:
     - lamp
     - tv
     - plant
-    - door
-    - window
 
+# 形状先验
 shape_prior:
   explicit:
     enabled: true
@@ -77,9 +104,9 @@ shape_prior:
   implicit:
     enabled: true
     latent_dim: 256
-    encoder_layers: [64, 128, 256, 512]
-    decoder_layers: [256, 512, 1024]
-    num_output_points: 2048
+    encoder_layers: [64, 128, 256, 512, 1024]
+    decoder_layers: [256, 512, 1024, 2048]
+    num_output_points: 4096
     init_weight: 0.3
   
   adaptive:
@@ -88,7 +115,9 @@ shape_prior:
     max_prior_weight: 0.9
     viewing_coverage: "dynamic"
     coverage_full_frames: 50
+    use_depth_confidence: true
 
+# 重建
 reconstruction:
   gaussian:
     sh_degree: 3
@@ -101,26 +130,30 @@ reconstruction:
     rotation_lr: 0.001
   
   optimization:
-    iterations: 1000
+    iterations: 1500  # 视频模式迭代少一些
     densify_from_iter: 200
-    densify_until_iter: 800
+    densify_until_iter: 1000
     densify_interval: 100
     densify_grad_threshold: 0.0002
     opacity_reset_interval: 3000
   
+  # 关键帧策略
   keyframe:
     enabled: true
     min_keyframes: 5
-    max_keyframes: 20
+    max_keyframes: 30
     selection_strategy: "coverage"
+    quality_threshold: 0.7  # 质量阈值
   
   loss:
     photometric: 1.0
-    depth_consistency: 0.1
+    depth_consistency: 0.15
     shape_prior: 0.3
     semantic_consistency: 0.2
     smoothness: 0.05
     symmetry: 0.01
+    temporal_consistency: 0.1  # 时序一致性
+    depth_confidence_weight: true
 
 camera:
   fov: 60.0

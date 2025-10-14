@@ -18,7 +18,7 @@ from torch.utils.tensorboard import SummaryWriter
 sys.path.append(str(Path(__file__).parent.parent))
 
 from src.segmentation.dinov2_extractor import DINOv2Extractor
-from src.segmentation.sam_segmenter import SAMSegmenter
+from src.segmentation.sam2_segmenter import SAMSegmenter
 from src.reconstruction.object_gaussian import ObjectGaussian, SceneGaussians, GaussianConfig
 from src.priors.prior_fusion import (
     ExplicitShapePrior, ImplicitShapePrior,

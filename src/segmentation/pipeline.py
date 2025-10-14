@@ -11,7 +11,7 @@ import cv2
 from tqdm import tqdm
 
 from .dinov2_extractor import DINOv2Extractor
-from .sam_segmenter import SAMSegmenter
+from .sam2_segmenter import SAMSegmenter
 from .object_tracker import ObjectTracker
 from .semantic_classifier import SemanticClassifier
 
