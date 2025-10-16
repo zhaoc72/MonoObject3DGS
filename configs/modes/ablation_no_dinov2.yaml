@@ -1,0 +1,28 @@
+# 消融实验 - 禁用DINOv2
+mode:
+  name: "ablation_no_dinov2"
+  description: "Ablation: without DINOv2 features"
+  priority: "ablation"
+
+# 禁用DINOv2
+dinov2:
+  enabled: false
+
+sam2:
+  enabled: true
+  model_size: "large"
+  checkpoint: "data/checkpoints/sam2_hiera_large.pt"
+  points_per_side: 32
+  pred_iou_thresh: 0.88
+  stability_thresh: 0.95
+  use_feature_refinement: false  # 无法使用特征优化
+
+depth:
+  enabled: true
+  model_size: "vitl"
+  metric_depth: true
+
+performance:
+  expected_fps: 0.3
+  gpu_memory: "medium"
+  accuracy_level: 70  # 预期精度下降

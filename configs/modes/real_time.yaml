@@ -1,0 +1,50 @@
+# 实时模式 - 优先时效性
+mode:
+  name: "real_time"
+  description: "Fast inference, acceptable accuracy"
+  priority: "speed"
+
+# DINOv2 - Small模型
+dinov2:
+  enabled: true
+  model_size: "small"  # 使用小模型
+  model_name: "facebook/dinov2-small"
+  feature_dim: 384
+  use_registers: false  # 禁用register
+  enable_xformers: true
+  multi_scale: false  # 单尺度
+  scales: [1.0]
+  cache_features: false
+
+# SAM 2 - Tiny模型
+sam2:
+  enabled: true
+  model_size: "tiny"  # 最小模型
+  checkpoint: "data/checkpoints/sam2_hiera_tiny.pt"
+  points_per_side: 16  # 稀疏采样
+  pred_iou_thresh: 0.86
+  stability_thresh: 0.90
+  box_nms_thresh: 0.5
+  crop_n_layers: 0  # 不使用裁剪
+  crop_overlap_ratio: 0.0
+  min_mask_area: 500
+  use_feature_refinement: false
+
+# Depth Anything V2 - Small模型
+depth:
+  enabled: true
+  model_size: "vits"
+  metric_depth: true
+  max_depth: 15.0
+  multi_scale: false
+  scales: [1.0]
+  fusion_method: "none"
+  estimate_confidence: false
+  edge_aware_refinement: false
+  temporal_smoothing: false
+
+# 性能统计
+performance:
+  expected_fps: 2.0  # 0.5秒/帧
+  gpu_memory: "low"  # 2GB
+  accuracy_level: 75

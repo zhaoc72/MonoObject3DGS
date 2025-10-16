@@ -1,0 +1,30 @@
+# 消融实验 - 禁用深度估计
+mode:
+  name: "ablation_no_depth"
+  description: "Ablation: without depth estimation"
+  priority: "ablation"
+
+dinov2:
+  enabled: true
+  model_size: "large"
+  model_name: "facebook/dinov2-large"
+  feature_dim: 1024
+
+sam2:
+  enabled: true
+  model_size: "large"
+  checkpoint: "data/checkpoints/sam2_hiera_large.pt"
+
+# 禁用深度估计
+depth:
+  enabled: false
+  # 使用固定深度值
+  fallback:
+    method: "uniform"  # uniform/random/plane
+    default_depth: 5.0  # 固定5米
+    depth_range: [2.0, 8.0]
+
+performance:
+  expected_fps: 0.2
+  gpu_memory: "medium"
+  accuracy_level: 50  # 3D重建质量大幅下降

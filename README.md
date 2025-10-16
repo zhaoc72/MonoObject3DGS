@@ -12,3 +12,38 @@
 - **实时处理**：视频模式下使用FastSAM实现实时分割
 
 ## 📋 系统架构
+
+
+# Flexible Configuration Guide
+
+## 🚀 Quick Start
+
+### 1. 高准确度模式（推荐用于研究）
+```bash
+python scripts/reconstruct_flexible.py \
+    --image data/test.jpg \
+    --mode high_accuracy
+
+
+python scripts/reconstruct_flexible.py \
+    --image data/test.jpg \
+    --mode real_time
+
+python scripts/reconstruct_flexible.py \
+    --image data/test.jpg \
+    --mode balanced
+    
+# 无DINOv2
+python scripts/reconstruct_flexible.py \
+    --image data/test.jpg \
+    --mode ablation_no_dinov2
+
+# 无深度估计
+python scripts/reconstruct_flexible.py \
+    --image data/test.jpg \
+    --mode ablation_no_depth
+
+# 最小配置
+python scripts/reconstruct_flexible.py \
+    --image data/test.jpg \
+    --mode ablation_minimal

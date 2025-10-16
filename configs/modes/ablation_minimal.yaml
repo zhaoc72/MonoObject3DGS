@@ -1,0 +1,29 @@
+# 消融实验 - 最小配置
+mode:
+  name: "ablation_minimal"
+  description: "Minimal configuration for baseline"
+  priority: "ablation"
+
+# 禁用DINOv2
+dinov2:
+  enabled: false
+
+# 使用基础SAM
+sam2:
+  enabled: true
+  model_size: "tiny"
+  checkpoint: "data/checkpoints/sam2_hiera_tiny.pt"
+  points_per_side: 16
+  use_feature_refinement: false
+
+# 禁用深度
+depth:
+  enabled: false
+  fallback:
+    method: "uniform"
+    default_depth: 5.0
+
+performance:
+  expected_fps: 3.0
+  gpu_memory: "low"
+  accuracy_level: 40

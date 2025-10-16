@@ -1,0 +1,46 @@
+# 平衡模式
+mode:
+  name: "balanced"
+  description: "Balance between accuracy and speed"
+  priority: "balanced"
+
+dinov2:
+  enabled: true
+  model_size: "base"
+  model_name: "facebook/dinov2-base"
+  feature_dim: 768
+  use_registers: true
+  enable_xformers: true
+  multi_scale: false
+  scales: [1.0]
+  cache_features: false
+
+sam2:
+  enabled: true
+  model_size: "base"
+  checkpoint: "data/checkpoints/sam2_hiera_base.pt"
+  points_per_side: 32
+  pred_iou_thresh: 0.88
+  stability_thresh: 0.95
+  box_nms_thresh: 0.7
+  crop_n_layers: 1
+  crop_overlap_ratio: 0.3
+  min_mask_area: 300
+  use_feature_refinement: true
+
+depth:
+  enabled: true
+  model_size: "vitb"
+  metric_depth: true
+  max_depth: 20.0
+  multi_scale: false
+  scales: [1.0]
+  fusion_method: "none"
+  estimate_confidence: true
+  edge_aware_refinement: true
+  temporal_smoothing: false
+
+performance:
+  expected_fps: 0.5  # 2秒/帧
+  gpu_memory: "medium"  # 4GB
+  accuracy_level: 85

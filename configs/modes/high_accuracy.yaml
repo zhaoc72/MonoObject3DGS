@@ -1,0 +1,50 @@
+# 高准确度模式 - 牺牲时效性
+mode:
+  name: "high_accuracy"
+  description: "Maximum accuracy, slower inference"
+  priority: "accuracy"
+
+# DINOv2 - Large模型
+dinov2:
+  enabled: true
+  model_size: "large"  # large/base/small/disabled
+  model_name: "facebook/dinov2-large"
+  feature_dim: 1024
+  use_registers: true
+  enable_xformers: true
+  multi_scale: true
+  scales: [1.0, 0.75, 0.5]  # 多尺度提取
+  cache_features: true  # 缓存特征加速
+
+# SAM 2 - Large模型
+sam2:
+  enabled: true
+  model_size: "large"  # large/base+/base/small/tiny/disabled
+  checkpoint: "data/checkpoints/sam2_hiera_large.pt"
+  points_per_side: 64  # 更密集采样
+  pred_iou_thresh: 0.90  # 更严格阈值
+  stability_thresh: 0.96
+  box_nms_thresh: 0.7
+  crop_n_layers: 2  # 更多裁剪层
+  crop_overlap_ratio: 0.5
+  min_mask_area: 100
+  use_feature_refinement: true  # 启用特征优化
+
+# Depth Anything V2 - Large模型
+depth:
+  enabled: true
+  model_size: "vitl"  # vitg/vitl/vitb/vits/disabled
+  metric_depth: true
+  max_depth: 20.0
+  multi_scale: true
+  scales: [1.0, 0.75, 0.5]
+  fusion_method: "weighted"
+  estimate_confidence: true
+  edge_aware_refinement: true
+  temporal_smoothing: false  # 单图模式关闭
+
+# 性能统计
+performance:
+  expected_fps: 0.1  # 10秒/帧
+  gpu_memory: "high"  # 8GB+
+  accuracy_level: 95
