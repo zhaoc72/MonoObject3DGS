@@ -1,0 +1,4 @@
+root: "/media/pc/D/datasets/kitti/"
+use_depth: false
+num_workers: 8
+batch_size: 1

@@ -1,0 +1,4 @@
+root: "/media/pc/D/datasets/scannet/"
+use_depth: true
+num_workers: 8
+batch_size: 1

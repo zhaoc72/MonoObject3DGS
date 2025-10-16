@@ -1,0 +1,20 @@
+segmentation:
+  use_dinov2: true
+  use_sam: true
+  fast: false
+priors:
+  weight_cad: 0.6
+  weight_implicit: 0.4
+gaussian:
+  iters: 400
+  seed: 42
+
+
+# 数据集默认入口（可在各 dataset.yaml 覆盖）
+datasets:
+  scannet: {root: "/media/pc/D/datasets/scannet/", batch_size: 1, num_workers: 4, use_depth: true}
+  pix3d: {root: "/media/pc/D/datasets/pix3d/", batch_size: 1, num_workers: 4}
+  co3dv2: {root: "/media/pc/D/datasets/co3dv2/", batch_size: 1, num_workers: 4}
+  imagenet3d: {root: "/media/pc/D/datasets/imagenet3d/", batch_size: 1, num_workers: 4}
+  kitti: {root: "/media/pc/D/datasets/kitti/", batch_size: 1, num_workers: 4, use_depth: false}
+  vkitti2: {root: "/media/pc/D/datasets/vkitti2/", batch_size: 1, num_workers: 4}

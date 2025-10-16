@@ -1,0 +1,3 @@
+root: "/media/pc/D/datasets/vkitti2/"
+num_workers: 8
+batch_size: 1
